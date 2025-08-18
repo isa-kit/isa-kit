@@ -245,11 +245,13 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
                   if (url != null) {
                     // **FIX**: Schedule state update for after the build phase
                     WidgetsBinding.instance.addPostFrameCallback((_) {
-                      setState(() {
-                        _tempConfig.properties['dataSourceUrl'] = url;
-                        _availableColumns = [];
-                      });
-                      _fetchColumnsForUrl(url);
+                      if (mounted) {
+                        setState(() {
+                          _tempConfig.properties['dataSourceUrl'] = url;
+                          _availableColumns = [];
+                        });
+                        _fetchColumnsForUrl(url);
+                      }
                     });
                   }
                 },
