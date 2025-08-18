@@ -1,8 +1,5 @@
-# flutterboard
+Isa kit for developing apps, dashboards, and more.
 
-A new Flutter project.
+## Features
 
-## Data
-https://gbfs.lyft.com/gbfs/1.1/bos/gbfs.json
-https://gbfs.lyft.com/gbfs/1.1/bos/en/station_status.json
-https://gbfs.lyft.com/gbfs/1.1/bos/en/station_information.json
+Dynamic UI Widgets

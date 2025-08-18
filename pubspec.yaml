@@ -1,19 +1,20 @@
-name: flutterboard
-description: A dashboard software.
-publish_to: 'none' 
-version: 1.0.0+1
+name: isa_kit
+description: A powerful Flutter package for creating dynamic, user-configurable dashboards from a widget tree.
+version: 0.0.1
+homepage: https://github.com/isa-kit/isa-kit
+repository: https://github.com/isa-kit/isa-kit
 
 environment:
   sdk: '>=3.3.3 <4.0.0'
+  flutter: ">=1.17.0"
 
 dependencies:
   flutter:
     sdk: flutter
+  provider: ^6.1.2
   http: ^1.2.1
-  fl_chart: ^0.68.0 
+  fl_chart: ^0.68.0
   maplibre_gl: ^0.22.0
-  cupertino_icons: ^1.0.8
-  provider: ^6.1.2 # ADDED: For state management
 
 dev_dependencies:
   flutter_test:
@@ -21,8 +22,3 @@ dev_dependencies:
   flutter_lints: ^3.0.0
 
 flutter:
-  uses-material-design: true
-
-  assets:
-    - assets/icons/
-    
