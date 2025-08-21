@@ -8,7 +8,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 
-// --- DATA SOURCES (Defined in the example app) ---
 const String stationInfoUrl = 'https://gbfs.lyft.com/gbfs/1.1/bos/en/station_information.json';
 const String stationStatusUrl = 'https://gbfs.lyft.com/gbfs/1.1/bos/en/station_status.json';
 
@@ -89,7 +88,6 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
-// --- DATA VIEW WRAPPER ---
 class DataViewWrapper extends StatefulWidget {
   final DynamicWidgetConfig config;
   final Widget Function(List<Map<String, dynamic>> data) builder;
@@ -108,12 +106,14 @@ class DataViewWrapperState extends State<DataViewWrapper> {
   @override
   void initState() {
     super.initState();
-    if (widget.config.properties['isDataEnabled'] ?? true) {
-      final url = widget.config.properties['dataSourceUrl'];
-      if (url != null) {
-        Provider.of<DashboardState>(context, listen: false).fetchDataForUrl(url);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && (widget.config.properties['isDataEnabled'] ?? true)) {
+        final url = widget.config.properties['dataSourceUrl'];
+        if (url != null) {
+          Provider.of<DashboardState>(context, listen: false).fetchDataForUrl(url);
+        }
       }
-    }
+    });
   }
 
   @override
@@ -149,8 +149,6 @@ class DataViewWrapperState extends State<DataViewWrapper> {
   }
 }
 
-
-// --- CONFIGURATION DIALOG (Now part of the example app) ---
 class ConfigurationDialog extends StatefulWidget {
   final DynamicWidgetConfig config;
   const ConfigurationDialog({super.key, required this.config});
@@ -163,6 +161,8 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
   List<String> _availableColumns = [];
   bool _isLoadingColumns = false;
   final Map<String, List<String>> _columnCache = {};
+  late final TextEditingController _titleController;
+  final Map<String, TextEditingController> _settingControllers = {};
 
   @override
   void initState() {
@@ -173,9 +173,21 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
       properties: Map.from(widget.config.properties),
       children: List.from(widget.config.children),
     );
+
+    _titleController = TextEditingController(text: _tempConfig.properties['title']);
+
     if (_tempConfig.properties['dataSourceUrl'] != null) {
       _fetchColumnsForUrl(_tempConfig.properties['dataSourceUrl']);
     }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    for (final controller in _settingControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
   }
 
   Future<void> _fetchColumnsForUrl(String url) async {
@@ -211,7 +223,6 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final titleController = TextEditingController(text: _tempConfig.properties['title']);
     return AlertDialog(
       title: const Text('Configure Widget'),
       content: SingleChildScrollView(
@@ -219,21 +230,36 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(controller: titleController, decoration: const InputDecoration(labelText: 'Title')),
+            TextField(controller: _titleController, decoration: const InputDecoration(labelText: 'Title')),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               value: _tempConfig.widgetType,
               decoration: const InputDecoration(labelText: 'Widget Type'),
               items: ['container', 'row', 'column', 'tableView', 'graphView', 'mapView']
-                  .map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-              onChanged: (value) => setState(() => _tempConfig.widgetType = value!),
+                  .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() => _tempConfig.widgetType = value);
+                    }
+                  });
+                }
+              },
             ),
             const Divider(height: 20),
             if (['tableView', 'graphView', 'mapView'].contains(_tempConfig.widgetType)) ...[
               SwitchListTile(
                 title: const Text('Enable Data'),
                 value: _tempConfig.properties['isDataEnabled'] ?? true,
-                onChanged: (val) => setState(() => _tempConfig.properties['isDataEnabled'] = val),
+                onChanged: (val) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() => _tempConfig.properties['isDataEnabled'] = val);
+                    }
+                  });
+                },
               ),
               DropdownButtonFormField<String>(
                 value: _tempConfig.properties['dataSourceUrl'],
@@ -243,7 +269,6 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
                     .toList(),
                 onChanged: (url) {
                   if (url != null) {
-                    // **FIX**: Schedule state update for after the build phase
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (mounted) {
                         setState(() {
@@ -261,23 +286,37 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
           ],
         ),
       ),
+      actionsAlignment: MainAxisAlignment.spaceBetween,
       actions: [
         if (widget.config.id != Provider.of<DashboardState>(context, listen: false).rootConfig.id)
           IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.red),
+            tooltip: 'Delete Widget',
             onPressed: () {
               Provider.of<DashboardState>(context, listen: false).removeWidget(widget.config.id);
               Navigator.of(context).pop();
             },
           ),
-        const Spacer(),
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
-        ElevatedButton(
-          onPressed: () {
-            _tempConfig.properties['title'] = titleController.text;
-            Navigator.of(context).pop(_tempConfig);
-          },
-          child: const Text('Save'),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: () {
+                _tempConfig.properties['title'] = _titleController.text;
+                _settingControllers.forEach((key, controller) {
+                  if (key == 'columnWidth') {
+                    _tempConfig.properties[key] = double.tryParse(controller.text) ?? 120.0;
+                  } else {
+                    _tempConfig.properties[key] = controller.text;
+                  }
+                });
+                Navigator.of(context).pop(_tempConfig);
+              },
+              child: const Text('Save'),
+            ),
+          ],
         ),
       ],
     );
@@ -312,10 +351,16 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
       value: _tempConfig.properties[settingKey],
       decoration: InputDecoration(labelText: label),
       items: _availableColumns.map((col) => DropdownMenuItem(value: col, child: Text(col))).toList(),
-      onChanged: (value) => setState(() => _tempConfig.properties[settingKey] = value),
+      onChanged: (value) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() => _tempConfig.properties[settingKey] = value);
+          }
+        });
+      },
     );
   }
-    
+
   Widget _buildColorSelector(String label, String settingKey) {
     final currentColor = Color(_tempConfig.properties[settingKey] ?? Colors.indigoAccent.value);
     return ListTile(
@@ -325,8 +370,12 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
         const colors = [Colors.indigoAccent, Colors.redAccent, Colors.greenAccent, Colors.amberAccent];
         final currentIndex = colors.indexWhere((c) => c.value == currentColor.value);
         final nextColor = colors[(currentIndex + 1) % colors.length];
-        setState(() {
-          _tempConfig.properties[settingKey] = nextColor.value;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              _tempConfig.properties[settingKey] = nextColor.value;
+            });
+          }
         });
       },
     );
@@ -343,34 +392,34 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
           max: max,
           divisions: divisions,
           label: (_tempConfig.properties[settingKey] as num? ?? min).toStringAsFixed(1),
-          onChanged: (value) => setState(() => _tempConfig.properties[settingKey] = value),
+          onChanged: (value) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                setState(() => _tempConfig.properties[settingKey] = value);
+              }
+            });
+          },
         ),
       ],
     );
   }
-    
+
   Widget _buildTextField(String label, String settingKey, {bool isNumeric = false}) {
-      final controller = TextEditingController(text: _tempConfig.properties[settingKey]?.toString() ?? '');
-      return Padding(
-        padding: const EdgeInsets.only(top: 8.0),
-        child: TextField(
-            controller: controller,
-            decoration: InputDecoration(labelText: label),
-            keyboardType: isNumeric ? TextInputType.number : TextInputType.text,
-            onChanged: (value) {
-                if (isNumeric) {
-                    _tempConfig.properties[settingKey] = double.tryParse(value) ?? 120.0;
-                } else {
-                    _tempConfig.properties[settingKey] = value;
-                }
-            },
-        ),
-      );
+    final controller = _settingControllers.putIfAbsent(
+      settingKey,
+      () => TextEditingController(text: _tempConfig.properties[settingKey]?.toString() ?? ''),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8.0),
+      child: TextField(
+        controller: controller,
+        decoration: InputDecoration(labelText: label),
+        keyboardType: isNumeric ? TextInputType.number : TextInputType.text,
+      ),
+    );
   }
 }
-
-
-// --- EXAMPLE WIDGET IMPLEMENTATIONS ---
 
 class ExampleTableView extends StatelessWidget {
   final List<Map<String, dynamic>> data;
