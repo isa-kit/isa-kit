@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
 // --- MODELS (Exported for users) ---
@@ -79,6 +78,7 @@ class DashboardState with ChangeNotifier {
   late HistoryNode _rootHistoryNode;
   late HistoryNode _currentHistoryNode;
   DashboardMode _mode = DashboardMode.edit;
+  bool _isDataLoadingEnabled = true;
 
   DashboardState() {
     _rootHistoryNode = HistoryNode(stateJson: _configToJson(_rootConfig), timestamp: DateTime.now());
@@ -87,15 +87,33 @@ class DashboardState with ChangeNotifier {
 
   DynamicWidgetConfig get rootConfig => _rootConfig;
   Map<String, List<Map<String, dynamic>>> get dataCache => _dataCache;
+  Map<String, bool> get loadingStatus => _loadingStatus;
   DashboardMode get mode => _mode;
+  bool get isDataLoadingEnabled => _isDataLoadingEnabled;
   HistoryNode get historyRoot => _rootHistoryNode;
   HistoryNode get currentHistory => _currentHistoryNode;
 
   bool get canUndo => _currentHistoryNode.parent != null;
   bool get canRedo => _currentHistoryNode.children.isNotEmpty;
 
+  void setData(String key, List<Map<String, dynamic>> data) {
+    _dataCache[key] = data;
+    _loadingStatus[key] = false;
+    notifyListeners();
+  }
+
+  void setLoading(String key, bool isLoading) {
+    _loadingStatus[key] = isLoading;
+    notifyListeners();
+  }
+
   void setMode(DashboardMode newMode) {
     _mode = newMode;
+    notifyListeners();
+  }
+  
+  void toggleDataLoading() {
+    _isDataLoadingEnabled = !_isDataLoadingEnabled;
     notifyListeners();
   }
 
@@ -145,6 +163,28 @@ class DashboardState with ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint("Error loading config from JSON: $e");
+    }
+  }
+
+  void deleteHistoryBranch(HistoryNode nodeToDelete) {
+    if (nodeToDelete.parent == null) return;
+
+    bool wasCurrentNodeInDeletedBranch = false;
+    HistoryNode? temp = _currentHistoryNode;
+    while(temp != null) {
+      if (temp.id == nodeToDelete.id) {
+        wasCurrentNodeInDeletedBranch = true;
+        break;
+      }
+      temp = temp.parent;
+    }
+
+    nodeToDelete.parent!.children.removeWhere((child) => child.id == nodeToDelete.id);
+
+    if (wasCurrentNodeInDeletedBranch) {
+      jumpToState(nodeToDelete.parent!);
+    } else {
+      notifyListeners();
     }
   }
 
@@ -212,24 +252,6 @@ class DashboardState with ChangeNotifier {
     }
     return null;
   }
-
-  Future<void> fetchDataForUrl(String url) async {
-    if (_dataCache.containsKey(url) || _loadingStatus[url] == true) return;
-    _loadingStatus[url] = true;
-    Future.microtask(notifyListeners);
-    try {
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        _dataCache[url] = List<Map<String, dynamic>>.from(data['data']['stations']);
-      } else {
-        throw Exception('Failed to load data (Code: ${response.statusCode})');
-      }
-    } finally {
-      _loadingStatus[url] = false;
-      Future.microtask(notifyListeners);
-    }
-  }
 }
 
 // --- UI COMPONENTS ---
@@ -275,6 +297,33 @@ class _SettingsDrawerState extends State<SettingsDrawer> {
     super.dispose();
   }
 
+  void _showDeleteConfirmation(BuildContext context, HistoryNode node) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Branch?'),
+          content: const Text('Are you sure you want to permanently delete this edit and all subsequent changes? This action cannot be undone.'),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+              onPressed: () {
+                Provider.of<DashboardState>(context, listen: false).deleteHistoryBranch(node);
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = Provider.of<DashboardState>(context);
@@ -290,12 +339,21 @@ class _SettingsDrawerState extends State<SettingsDrawer> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 40, 4, 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('UI Layout', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 4.0),
+                  child: Text('UI Layout', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                ),
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: [
+                    IconButton(
+                      icon: Icon(state.isDataLoadingEnabled ? Icons.cloud_queue : Icons.cloud_off),
+                      tooltip: 'Toggle Data Loading',
+                      onPressed: isEditMode ? state.toggleDataLoading : null,
+                    ),
                     IconButton(
                       icon: const Icon(Icons.history),
                       tooltip: 'Show Edit History',
@@ -328,6 +386,11 @@ class _SettingsDrawerState extends State<SettingsDrawer> {
               currentHistory: state.currentHistory,
               onNodeSelected: (node) {
                 state.jumpToState(node);
+              },
+              onNodeLongPress: (node) {
+                 if (node.parent != null) {
+                  _showDeleteConfirmation(context, node);
+                }
               },
             ),
           Expanded(
@@ -500,12 +563,14 @@ class HistoryTreeView extends StatefulWidget {
   final HistoryNode historyRoot;
   final HistoryNode currentHistory;
   final ValueChanged<HistoryNode> onNodeSelected;
+  final ValueChanged<HistoryNode> onNodeLongPress;
 
   const HistoryTreeView({
     super.key,
     required this.historyRoot,
     required this.currentHistory,
     required this.onNodeSelected,
+    required this.onNodeLongPress,
   });
 
   @override
@@ -521,6 +586,7 @@ class _HistoryTreeViewState extends State<HistoryTreeView> {
       root: widget.historyRoot,
       currentNode: widget.currentHistory,
       onNodeSelected: widget.onNodeSelected,
+      onNodeLongPress: widget.onNodeLongPress,
       context: context,
       panOffset: _panOffset,
     );
@@ -542,6 +608,9 @@ class _HistoryTreeViewState extends State<HistoryTreeView> {
           onTapUp: (details) {
             painter.handleTap(details.localPosition);
           },
+          onLongPressStart:(details) {
+            painter.handleLongPress(details.localPosition);
+          },
           child: CustomPaint(
             size: Size(requiredWidth, 120),
             painter: painter,
@@ -556,6 +625,7 @@ class _HistoryTreePainter extends CustomPainter {
   final HistoryNode root;
   final HistoryNode currentNode;
   final ValueChanged<HistoryNode> onNodeSelected;
+  final ValueChanged<HistoryNode> onNodeLongPress;
   final BuildContext context;
   final Offset panOffset;
 
@@ -567,6 +637,7 @@ class _HistoryTreePainter extends CustomPainter {
     required this.root,
     required this.currentNode,
     required this.onNodeSelected,
+    required this.onNodeLongPress,
     required this.context,
     required this.panOffset,
   });
@@ -649,6 +720,20 @@ class _HistoryTreePainter extends CustomPainter {
     }
     if (tappedNode != null) {
       onNodeSelected(tappedNode);
+    }
+  }
+  
+  void handleLongPress(Offset position) {
+    final tappedPosition = position - panOffset;
+    HistoryNode? tappedNode;
+    for (final entry in _nodeRects.entries) {
+      if (entry.value.contains(tappedPosition)) {
+        tappedNode = _findNodeById(root, entry.key);
+        break;
+      }
+    }
+    if (tappedNode != null) {
+      onNodeLongPress(tappedNode);
     }
   }
 

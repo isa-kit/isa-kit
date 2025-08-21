@@ -11,6 +11,36 @@ import 'package:flutter/foundation.dart';
 const String stationInfoUrl = 'https://gbfs.lyft.com/gbfs/1.1/bos/en/station_information.json';
 const String stationStatusUrl = 'https://gbfs.lyft.com/gbfs/1.1/bos/en/station_status.json';
 
+// --- APPLICATION-SPECIFIC DATA HANDLING ---
+
+class DataManager {
+  static final DataManager _instance = DataManager._internal();
+  factory DataManager() => _instance;
+  DataManager._internal();
+
+  Future<void> fetchDataForUrl(BuildContext context, String url) async {
+    final state = Provider.of<DashboardState>(context, listen: false);
+    if (state.dataCache.containsKey(url) || (state.loadingStatus[url] ?? false)) return;
+
+    state.setLoading(url, true);
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final stations = List<Map<String, dynamic>>.from(data['data']['stations']);
+        state.setData(url, stations);
+      } else {
+        throw Exception('Failed to load data (Code: ${response.statusCode})');
+      }
+    } catch (e) {
+      debugPrint("Error fetching data for $url: $e");
+      state.setLoading(url, false); // Ensure loading is turned off on error
+    }
+  }
+}
+
+
 void main() {
   runApp(const MyApp());
 }
@@ -107,45 +137,55 @@ class DataViewWrapperState extends State<DataViewWrapper> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && (widget.config.properties['isDataEnabled'] ?? true)) {
-        final url = widget.config.properties['dataSourceUrl'];
-        if (url != null) {
-          Provider.of<DashboardState>(context, listen: false).fetchDataForUrl(url);
-        }
-      }
+      _fetchData();
     });
   }
 
   @override
   void didUpdateWidget(DataViewWrapper oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if ((widget.config.properties['isDataEnabled'] ?? true) &&
-        (widget.config.properties['dataSourceUrl'] != oldWidget.config.properties['dataSourceUrl'])) {
+    if (widget.config.properties['dataSourceUrl'] != oldWidget.config.properties['dataSourceUrl']) {
+       _fetchData();
+    }
+  }
+  
+  void _fetchData() {
+    final state = Provider.of<DashboardState>(context, listen: false);
+    if (mounted && state.isDataLoadingEnabled) {
       final url = widget.config.properties['dataSourceUrl'];
       if (url != null) {
-        Provider.of<DashboardState>(context, listen: false).fetchDataForUrl(url);
+        DataManager().fetchDataForUrl(context, url);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!(widget.config.properties['isDataEnabled'] ?? true)) {
-      return const Center(child: Icon(Icons.power_off, color: Colors.grey, size: 40));
+    final state = Provider.of<DashboardState>(context);
+    
+    if (!state.isDataLoadingEnabled) {
+      return Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: SingleChildScrollView(
+          child: Text(
+            const JsonEncoder.withIndent('  ').convert(widget.config.toJson()),
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+        ),
+      );
     }
 
-    final state = Provider.of<DashboardState>(context);
     final url = widget.config.properties['dataSourceUrl'];
     if (url == null) return const Center(child: Text("Data source not configured."));
 
+    if (state.loadingStatus[url] ?? true) return const Center(child: CircularProgressIndicator());
+    
     final data = state.dataCache[url];
-    if (data == null) return const Center(child: CircularProgressIndicator());
+    if (data == null) return const Center(child: Text("No data available."));
 
-    final filteredData = data;
+    if (data.isEmpty) return const Center(child: Text("No data to display."));
 
-    if (filteredData.isEmpty) return const Center(child: Text("No data to display."));
-
-    return widget.builder(filteredData);
+    return widget.builder(data);
   }
 }
 
@@ -167,12 +207,7 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
   @override
   void initState() {
     super.initState();
-    _tempConfig = DynamicWidgetConfig(
-      id: widget.config.id,
-      widgetType: widget.config.widgetType,
-      properties: Map.from(widget.config.properties),
-      children: List.from(widget.config.children),
-    );
+    _tempConfig = widget.config.copy();
 
     _titleController = TextEditingController(text: _tempConfig.properties['title']);
 
@@ -242,7 +277,18 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
                 if (value != null) {
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (mounted) {
-                      setState(() => _tempConfig.widgetType = value);
+                      setState(() {
+                         _tempConfig.widgetType = value;
+                         // Add default properties for new widget types
+                         if (value == 'graphView') {
+                           _tempConfig.properties.putIfAbsent('barColor', () => Colors.indigoAccent.value);
+                         } else if (value == 'mapView') {
+                           _tempConfig.properties.putIfAbsent('iconSize', () => 0.5);
+                           _tempConfig.properties.putIfAbsent('iconAssetPath', () => 'assets/icons/icons8-map-pin-64.png');
+                         } else if (value == 'tableView') {
+                            _tempConfig.properties.putIfAbsent('columnWidth', () => 120.0);
+                         }
+                      });
                     }
                   });
                 }
@@ -250,17 +296,6 @@ class ConfigurationDialogState extends State<ConfigurationDialog> {
             ),
             const Divider(height: 20),
             if (['tableView', 'graphView', 'mapView'].contains(_tempConfig.widgetType)) ...[
-              SwitchListTile(
-                title: const Text('Enable Data'),
-                value: _tempConfig.properties['isDataEnabled'] ?? true,
-                onChanged: (val) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) {
-                      setState(() => _tempConfig.properties['isDataEnabled'] = val);
-                    }
-                  });
-                },
-              ),
               DropdownButtonFormField<String>(
                 value: _tempConfig.properties['dataSourceUrl'],
                 decoration: const InputDecoration(labelText: 'Data Source'),
